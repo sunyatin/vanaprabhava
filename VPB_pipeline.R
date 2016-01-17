@@ -2,6 +2,7 @@
 
 # VANAPRABHAVA pipeline, only UNIX compatible
 # v1.0 created on Dec. 30th 2015
+# v1.1 Dec. 31th 2015 -- now can deal with simple conditions between parameters
 # remi (dot) tournebize (at) gmail (dot) com
 # command-line in UNIX: Rscript path_to_script/VPB.R path_to_the_parameter_file
 # make sure that VPB.R script is executable (chmod +750)
@@ -80,19 +81,21 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
   }
   
   # replace all data by their values
-  vals <- as.data.frame(cbind(priors[,1], NA), stringsAsFactors=F)
-  names(vals) <- c("param","val"); vals$val <- as.numeric(vals$val)
-  for ( i in 1:nrow(priors) ) {
-    if (priors[i,3] == "unif") {
-      vals[i,2] <- runif(1, as.numeric(priors[i,4]), as.numeric(priors[i,5]))
-    } else if (priors[i,3] == "logunif") {
-      logval <- runif(1, log10(as.numeric(priors[i,4])), log10(as.numeric(priors[i,5])))
-      vals[i,2] <- 10**logval
-    } else {
-      stop("Unrecognized distribution law...")
+  if (length(priors)>0) {
+    vals <- as.data.frame(cbind(priors[,1], NA), stringsAsFactors=F)
+    names(vals) <- c("param","val"); vals$val <- as.numeric(vals$val)
+    for ( i in 1:nrow(priors) ) {
+      if (priors[i,3] == "unif") {
+        vals[i,2] <- runif(1, as.numeric(priors[i,4]), as.numeric(priors[i,5]))
+      } else if (priors[i,3] == "logunif") {
+        logval <- runif(1, log10(as.numeric(priors[i,4])), log10(as.numeric(priors[i,5])))
+        vals[i,2] <- 10**logval
+      } else {
+        stop("Unrecognized distribution law...")
+      }
+      if (priors[i,2]=="1") vals[i,2] <- round(vals[i,2])
     }
-    if (priors[i,2]=="1") vals[i,2] <- round(vals[i,2])
-  }
+  } else { vals <- NULL }
   
   # replace values
   en <- replace(en, vals)
@@ -153,6 +156,7 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
     # print
     rownames(EE) <- NULL
     colnames(EE)[-1] <- paste("ISL_",2:ncol(EE)-1,sep="")
+    print("Past historical events:")
     print(EE)
     
     # remove stable Ne events on a time-sorted EE matrix
@@ -214,9 +218,9 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
   
   # get command tail
   tail.ms <- paste("-T -s 1 | grep \"(\" > ",outDir,"/temp/ms.txt",sep="")
-
-  ms <- paste(c(ms, EE.ms, tail.ms), collapse=" ")
   
+  # assemble the MS command
+  ms <- paste(c(ms, EE.ms, tail.ms), collapse=" ")
   
   return(list(ms=ms, vals=vals, mu=c(mu), No=No, n=n))
 }
@@ -267,9 +271,9 @@ if (!dir.exists(paste(outDir,"/PHYLO",sep=""))) dir.create(paste(outDir,"/PHYLO"
 if (!dir.exists(paste(outDir,"/SFS",sep=""))) dir.create(paste(outDir,"/SFS",sep=""))
 if (empty_previous_files==1) {
   f <- paste(outDir,"/PHYLO/",list.files(paste(outDir,"/PHYLO",sep="")),sep="")
-  x=sapply(f, function(x) if (file.exists(f)) unlink(f, recursive=FALSE))
+  if (length(f)>0) x=sapply(f, function(x) if (file.exists(x)) unlink(x, recursive=FALSE))
   f <- paste(outDir,"/SFS/",list.files(paste(outDir,"/SFS",sep="")),sep="")
-  x=sapply(f, function(x) if (file.exists(f)) unlink(f, recursive=FALSE))
+  if (length(f)>0) x=sapply(f, function(x) if (file.exists(x)) unlink(x, recursive=FALSE))
   if (file.exists(paste(outDir,"/temp/ms.txt",sep=""))) unlink(paste(outDir,"/temp/ms.txt",sep=""))
   if (file.exists(paste(outDir,"/temp/ListPRM.bin",sep=""))) unlink(paste(outDir,"/temp/ListPRM.bin",sep=""))
   print("Safely removed previous files from the outDir!")
@@ -299,6 +303,9 @@ inputFile <- normalizePath(inputFile)
 setwd(outDir)
 print(paste("Set directory to:",outDir))
 
+print("Started at: ")
+print(proc.time())
+
 # sink to log file
 log <- file(paste(outDir,"/",RADICAL,".log",sep=""), open = "wt")
 sink(log, type="output", split=T)
@@ -326,6 +333,7 @@ for ( run in simul_start:simul_end ) {
   } else {
     write.table(t(vals), paste(outDir,"/",RADICAL,".priors",sep=""), col.names=F, row.names=F, sep="\t", append=T, quote=F)
   }
+  print("Parameter values:")
   print(t(vals))
   
   # get the VPB-python command
@@ -341,22 +349,28 @@ for ( run in simul_start:simul_end ) {
   if (verbose==0) python <- paste(python, "--quiet")
   
   # systemize
+  ## MS
+  cat("\n")
   print(ms)
-    unlink(paste(outDir,"/temp/ms.txt",sep=""))
-    MS.STDOUT <- system(ms, intern=TRUE)
-    attr <- attributes(MS.STDOUT)
-    if (!is.null(attr) && attr$status!=0) stop("ERROR on exit status of VPB.py")
+  unlink(paste(outDir,"/temp/ms.txt",sep=""))
+  MS.STDOUT <- system(ms, intern=TRUE)
+  attr <- attributes(MS.STDOUT)
+  if (!is.null(attr) && attr$status!=0) stop("ERROR on exit status of VPB.py")
     #print(MS.STDOUT)
+  ## PYTHON
+  cat("\n")
   print(python)
-    VPB.STDOUT <- system(python, intern=TRUE)
-    attr <- attributes(VPB.STDOUT)
-    if (!is.null(attr) && attr$status!=0) stop("ERROR on exit status of VPB.py")
-    print(VPB.STDOUT)
+  VPB.STDOUT <- system(python, intern=TRUE)
+  attr <- attributes(VPB.STDOUT)
+  if (!is.null(attr) && attr$status!=0) stop("ERROR on exit status of VPB.py")
+  print(VPB.STDOUT)
   
 }
 
 # end sinking to log file
 sink()
 
+print("Ended at: ")
+print(proc.time())
 print("ALL DONE")
 
