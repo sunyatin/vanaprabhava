@@ -1,12 +1,13 @@
 #!/usr/bin/env Rscript
 
-print.past.events <- TRUE
-sequential.scaling <- TRUE
+print.past.events <- TRUE # whether to prompt to STDOUT the specification of past events
+
+# VANAPRABHAVA v1.2 - 02012015
 
 # VANAPRABHAVA pipeline, only UNIX compatible
-# v1.0 created on Dec. 30th 2015
-# v1.1 Dec. 31th 2015 -- now can deal with simple conditions between unique parameters
-# v1.2 Jan. 2nd 2016 -- added a sequential scaling for Ne variations
+# v1.0 30122015 -- 
+# v1.1 31122015 -- now can deal with simple conditions between unique parameters
+# v1.2 02012016 -- added a sequential scaling for Ne variations + maxTreeHeight
 # remi (dot) tournebize (at) gmail (dot) com
 # command-line in UNIX: Rscript path_to_script/VPB.R path_to_the_parameter_file
 # make sure that VPB.R script is executable (chmod +750)
@@ -14,6 +15,8 @@ argv <- commandArgs(trailingOnly=TRUE)
 
 inputFile <- argv[1]
 if (!file.exists(inputFile)) stop("ERROR. Input file does not exist! Exiting.")
+
+print.MS.coalescent <- argv[2]
 
 # by default in MS, theta=4*No*mu for No in diploid individuals
 coalescent.ploidy <- "haploid" # either "haploid" or "diploid"
@@ -181,7 +184,7 @@ get.conditional.values <- function(priors, conditions) {
 }
 
 
-generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent.ploidy) {
+generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent.ploidy, sequential.scaling) {
   
   if (firstRun==TRUE) {
     con <- file(inputFile, open="r")
@@ -241,7 +244,7 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
   # get No
   No <- as.numeric(Ne[1])
   
-  get.past.events.command <- function(ej, en, eno, No) {
+  get.past.events.command <- function(ej, en, eno, No, sequential.scaling) {
     
     EE <- matrix(c(0, as.numeric(Ne)/No), nrow=1)
     if (!is.null(en)) {
@@ -360,11 +363,11 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
   
   # get past events MS command
   ## sort the historical events and Ne-div-rescale if requested by the user
-  EE.ms <- get.past.events.command(ej, en, eno, No)
+  EE.ms <- get.past.events.command(ej, en, eno, No, sequential.scaling)
   
   # get command tail
-  tail.ms <- paste("-T -s 1 | grep \"(\" > ",outDir,"/temp/ms.txt",sep="")
-  
+  tail.ms <- paste("-T -s 1 -L > ",outDir,"/temp/ms.txt",sep="")
+
   # assemble the MS command
   ms <- paste(c(ms, EE.ms, tail.ms), collapse=" ")
   
@@ -382,6 +385,9 @@ verbose <- 1
 drawTrees <- 0
 forceUltrametricity <- 1
 empty_previous_files <- 0
+NeVariationsDefinedInReferenceToPresentNe <- 0
+maxNumberOfSpecies <- -1
+maxTreeHeight <- -1
 # read [ADMIN] parameters
 con <- file(inputFile, open="r")
 read <- FALSE
@@ -405,6 +411,13 @@ verbose <- as.integer(verbose)
 drawTrees <- as.integer(drawTrees)
 forceUltrametricity <- as.integer(forceUltrametricity)
 empty_previous_files <- as.integer(empty_previous_files)
+NeVariationsDefinedInReferenceToPresentNe <- as.integer(NeVariationsDefinedInReferenceToPresentNe)
+maxTreeHeight <- as.numeric(maxTreeHeight)
+print(paste("Maximum tree height allowed: ", maxTreeHeight))
+sequential.scaling <- ifelse(NeVariationsDefinedInReferenceToPresentNe==1, FALSE, TRUE)
+print(paste("Sequential scaling: ", sequential.scaling))
+maxNumberOfSpecies <- as.integer(maxNumberOfSpecies)
+print(paste("Maximum number of species allowed in final phylo:",maxNumberOfSpecies))
 
 # check the absence of spaces in paths
 if ( grepl(" ",ms_path) || !file.exists(ms_path) ) stop("ERROR. Found a space in ms_path or file does not exist. Exiting.")
@@ -427,6 +440,8 @@ if (empty_previous_files==1) {
   f <- paste(outDir,"/SFS/",list.files(paste(outDir,"/SFS",sep="")),sep="")
   if (length(f)>0) x=sapply(f, function(x) if (file.exists(x)) unlink(x, recursive=FALSE))
   if (file.exists(paste(outDir,"/temp/ms.txt",sep=""))) unlink(paste(outDir,"/temp/ms.txt",sep=""))
+  if (file.exists(paste(outDir,"/temp/tree.txt",sep=""))) unlink(paste(outDir,"/temp/tree.txt",sep=""))
+  if (file.exists(paste(outDir,"/temp/tmrca.txt",sep=""))) unlink(paste(outDir,"/temp/tmrca.txt",sep=""))
   if (file.exists(paste(outDir,"/temp/ListPRM.bin",sep=""))) unlink(paste(outDir,"/temp/ListPRM.bin",sep=""))
   if (file.exists(paste(outDir,"/",RADICAL,".log",sep=""))) unlink(paste(outDir,"/",RADICAL,".log",sep=""))
   if (file.exists(paste(outDir,"/",RADICAL,".errors",sep=""))) unlink(paste(outDir,"/",RADICAL,".errors",sep=""))
@@ -471,7 +486,7 @@ for ( run in simul_start:simul_end ) {
   firstRun <- ifelse(run==simul_start, TRUE, FALSE)
   
   # get the priors
-  LOUT <- generate.ms.command(ms_path, inputFile, firstRun, outDir, coalescent.ploidy)
+  LOUT <- generate.ms.command(ms_path, inputFile, firstRun, outDir, coalescent.ploidy, sequential.scaling)
   for (l in seq_along(LOUT)) assign(names(LOUT)[l], LOUT[[l]])
 
   # export the priors
@@ -495,35 +510,65 @@ for ( run in simul_start:simul_end ) {
   
   # get the VPB-python command
   python <- paste(VPB_path," ",
-                  paste(outDir,"/temp/ms.txt",sep="")," ",
+                  paste(outDir,"/temp/tree.txt",sep="")," ",
                   "-m ",sprintf("%.20f", mu)," ",
                   "-s ",4 * No," ",
                   "-I ",paste(n,collapse=" ")," ",
                   "-ophylo ",outDir,"/PHYLO/",RADICAL,"_",run,".newick ",
                   "-osfs ",outDir,"/SFS/",RADICAL,"_",run,".sfs",sep="")
-  if (forceUltrametricity==1) python <- paste(python, "--forceUltrametric")
+  if (forceUltrametricity==1) python <- paste(python, "--forceUltrametric --maxNumberOfSpecies",maxNumberOfSpecies)
   if (drawTrees==1) python <- paste(python, "--drawTrees")
   if (verbose==0) python <- paste(python, "--quiet")
   
   # systemize
+  
   ## MS
   cat("\n")
   print(ms)
   unlink(paste(outDir,"/temp/ms.txt",sep=""))
+  unlink(paste(outDir,"/temp/tree.txt",sep=""))
+  unlink(paste(outDir,"/temp/tmrca.txt",sep=""))
   MS.STDOUT <- system(ms, intern=TRUE)
   attr <- attributes(MS.STDOUT)
   if (!is.null(attr) && attr$status!=0) stop("ERROR on exit status of VPB.py")
     #print(MS.STDOUT)
-  ## PYTHON
-  cat("\n")
-  print(python)
-  VPB.STDOUT <- system(python, intern=TRUE)
-  attr <- attributes(VPB.STDOUT)
-  if (!is.null(attr) && attr$status!=0) {
-    err <- c(RADICAL, run, "ERROR in python conversion. Most probably due to too large efficient sizes outputting large branch lengths which cannot be converted to C long type.")
+  
+  ## EXTRACT TMRAC & PHYLO
+  GREP.CMD.1 <- paste("cat ",outDir,"/temp/ms.txt | grep \"(\" > ",outDir,"/temp/tree.txt",sep="")
+  GREP.CMD.2 <- paste("cat ",outDir,"/temp/ms.txt | grep \"time:\" > ",outDir,"/temp/tmrca.txt",sep="")
+  #print(GREP.CMD.1)
+    system(GREP.CMD.1)
+  #print(GREP.CMD.2)
+    system(GREP.CMD.2)
+  ### read time to MRCA
+    tmrca <- read.table(paste(outDir,"/temp/tmrca.txt",sep=""), sep="\t", header=F, stringsAsFactors=F)
+    tmrca <- as.numeric(tmrca[2]) * 4 * No
+    cat("\n")
+    print(paste("TMRCA (in generations):",tmrca))
+	
+	## if requested, output the MS coalescent tree
+	if ( as.character(print.MS.coalescent) == "1" ) {
+		file.copy(paste(outDir,"/temp/tree.txt",sep=""), paste(outDir,"/PHYLO/",RADICAL,"_",run,".ms",sep=""))
+	}
+    
+  if ( maxTreeHeight == -1 || tmrca <= maxTreeHeight ) {
+    ## PYTHON
+    cat("\n")
+    print(python)
+    VPB.STDOUT <- system(python, intern=TRUE)
+    print(VPB.STDOUT)
+    attr <- attributes(VPB.STDOUT)
+    if (!is.null(attr) && attr$status!=0) {
+      err <- c(RADICAL, run, "ERROR in python conversion. Most probably due to too large efficient sizes outputting large branch lengths which cannot be converted to C long type.")
+      print(paste(err, collapse=" "))
+      write.table(paste(err, collapse="\t"), paste(outDir,"/",RADICAL,".errors",sep=""), append=T, row.names=F, col.names=F, quote=F)
+    }
+  } else {
+    cat("\n")
+    err <- c(RADICAL, run, "ERROR. Tree height is superior to maxTreeHeight. Exiting this run.")
+    print(paste(err, collapse=" "))
     write.table(paste(err, collapse="\t"), paste(outDir,"/",RADICAL,".errors",sep=""), append=T, row.names=F, col.names=F, quote=F)
   }
-  print(VPB.STDOUT)
   
 }
 
