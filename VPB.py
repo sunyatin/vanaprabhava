@@ -1,11 +1,15 @@
 
 from ete3 import Tree
+from ete3 import PhyloTree
 import numpy
 import time
 
+# version with a matrix-intermediate
+# guess it will be longer than v1.1
+
 # assumes coalescent, ie ultrametric trees
 
-numpy.random.seed(2)
+numpy.random.seed(111)
 
 init = time.time()
 
@@ -44,7 +48,7 @@ def search_leaves_by_sp(t, value):
     return(leaves)
 
 
-t = Tree("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/test.txt", format=1)
+t = PhyloTree("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/test.txt", format=1)
 
 #print t
 
@@ -72,110 +76,66 @@ for node in t.traverse("preorder"):
             for leaf in node:
                 leaf.sp = spID
 
-# print the mutational tree
-#t2 = t.copy()
-#for leaf in t2:
-#    leaf.name = leaf.sp
-#if plot_trees: t2.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/2MUT.png", w=183, units="mm")
+# cristallize the species info
+def set_sp_ID(node):
+    return node.sp
+t.set_species_naming_function(set_sp_ID)
+
+#t.show()
 
 # print the mutational tree
 for leaf in t:
     leaf.name = "_"+str(leaf.sp)+"_" +leaf.name
-t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/2MUT_v11.png", w=183, units="mm")
+print "here"
+t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/2MUT.png", w=183, units="mm")
 
+print "CONVERTING"
 
-print "Get (decr) sorted species IDs"
-spIDs = get_all_sp(t)
-print len(spIDs)
+t.get_descendant_evol_events()
 
-print "Converting to phylogeny"
-# the traversing could be sped up maybe
-# eg by computing the max distance between matching leaves
-# and pruning them out FIRST (ie pruning the largest paraphylies)
+# collapser tous les evenements
 
-# DO IT BY: PREORDER / LEVELORDER / POSTORDER
-# PREORDER : serait bcp trop long
-# LEVELORDER : idem
-# without addition of an external function
-# en post order il y a moyen de perdre tres vite de la complexite
-# en 5 levels a peu pres isomorphe, on gagne environ
-# n/5 diversite
+#t2 = t.collapse_lineage_specific_expansions(species=None)
+#print t2.get_ascii(show_internal=True)
 
-#TreeNode.up.remove_child('x')
+#f = open('C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/SFS.txt', 'w+')
 
-iter = 0
-SFS = []
-outSP = []
-for spid in spIDs:
-    matchleaves = search_leaves_by_sp(t, spid)
-    
-    if len(matchleaves) >= 1:
-        ssp = []
-        for ml in matchleaves:
-            ssp.append(ml.name)
-        SFS.append(ssp)
-        outSP.append(matchleaves[0].name)
-    
-    if len(matchleaves) >= 2:
-        
-        # note 4 future profiling: use a list comprehension
-        
-        MRCA = t.get_common_ancestor(matchleaves)
-        if not MRCA.is_root():
-            upMRCA = MRCA.up
-            keepleaf = matchleaves[0]
-            newdist = t.get_distance(upMRCA, keepleaf)
-            MRCA.detach()
-            upMRCA.add_child(keepleaf, keepleaf.name, newdist)        
-        else:
-            keepleaf = matchleaves[0]
-            newdist = t.get_distance(MRCA, keepleaf)
-            MRCA.children[0].detach()
-            MRCA.children[0].detach()
-            MRCA.add_child(keepleaf, keepleaf.name, newdist)
-    iter += 1
-    if iter % 100 == 0: print iter,
+for node in t.traverse("preorder"): # better use inner nodes
+    if not node.is_leaf():
+        if node.evoltype == 'D':
+            leaves = node.get_leaves()
+            
+            # populate the SFS
+            #for leaf in leaves:
+                #f.write(leaf.name+"\t")
+            #f.write("\n")            
+            
+            upMRCA = node.up
+            leaf = leaves[0]
+            newDist = t.get_distance(node.up, leaf)
+            leaf.detach()
+            upMRCA.add_child(leaf, leaf.name, newDist)
+            node.detach()
 
-#print t
-#print SFS
+#f.close()
 
-
-def get_duplicates(l):
-  seen = set()
-  seen_add = seen.add
-  overseen = set( x for x in l if x in seen or seen_add(x) )
-  return list( overseen )
-  
-  
-# reformat the SFS list of lists
-#flatSFS = [item for sublist in SFS for item in sublist]
-#dupSP = set([x for x in flatSFS if flatSFS.count(x) > 1])
-#if len(dupSP) > 0:
-#    for dsp in dupSP:
-dupRows = []
-for i in range(len(SFS)):
-    for j in range(1, len(SFS[i])):
-        if SFS[i][j] in outSP:
-            print str(i) + "  " + str(j)
-            print "REDUNDANCY!!!"
-            dupRows.append(i)            
-for i in sorted(dupRows, reverse=True):
-    del SFS[i]
-    
-f = open('C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/SFS.txt', 'w+')
-for i in range(len(SFS)):
-    f.write("\t".join(SFS[i]))
-    f.write("\n")
-f.close()
-    
-    
-# TMP
-for leaf in t:
-    leaf.name = leaf.sp    
-    
-#if plot_trees: 
-t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/3_FINAL_NEW.png", w=183, units="mm")
-t.write(format=5, outfile="C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/V1.1.txt")
+if plot_trees: t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/3FINAL.png", w=183, units="mm")
 
 print ">>>> " + str(time.time() - init)
+
+for leaf in t:
+    leaf.name = leaf.species
+t.write(format=5, outfile="C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/V3.txt")
+
+t = PhyloTree("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/V3.txt", format=5)
+t2 = PhyloTree("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/V1.1.txt", format=5)
+ 
+comp = t2.compare(t)
+
+print comp
+
+
+
+
+
 
