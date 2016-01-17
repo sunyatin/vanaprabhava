@@ -2,7 +2,7 @@
 
 # -*- coding: utf-8 -*-
 """
-VANAPRABHAVA v.1.6
+VANAPRABHAVA v.2
 
 Created on Wed Dec 23 17:33:31 2015
 @author: Remi Tournebize
@@ -13,7 +13,8 @@ v1.2: more profiling than v1.1 resulting in a significant gain of speed
 v1.3_ms: few debuggings on the SFS (duplicates)
 v1.4: debugged issues related to time decimal precision in Newick strings + modified force_ultrametricity module
 v1.5 31122015: changed binomial to poisson random (large branch lengths throw an error on C long type for binomial)
-v1.6 07012015: print out the number of species 1 line AFTER the newick-formatted phylo tree in the .newick output files
+v1.6 07012015: prints out the number of species 1 line AFTER the newick-formatted phylo tree in the .newick output files
+v2.0 08012015: MAJOR CHANGE in the traversing function to convert demo into phylo: huge gain of speed for megademographies
 """
 
 from ete3 import Tree
@@ -32,7 +33,7 @@ import os.path
 
 # assumes coalescent, ie ultrametric trees
 
-
+"""
 ################
 ## PARAMETERS ##
 ################
@@ -46,9 +47,9 @@ parser.add_argument('-m', '--mutationRate', type=float, required=True,
                     action="store", help="mean mutation rate per lineage per generation")
 parser.add_argument('-s', '--scalingFactor', type=float, required=True,
                     action="store", help="a factor to rescale branch lengths (set it to 1 if you do not need to rescale),  should be mandatory for MS input trees which are scaled by No")
-parser.add_argument('-ophylo', '--PHYLOoutput', type=str, required=True, 
+parser.add_argument('-ophylo', '--PHYLOoutput', type=str, required=True,
                     action="store", help="path for the output phylogeny")
-parser.add_argument('-osfs', '--SFSoutput', type=str, required=True, 
+parser.add_argument('-osfs', '--SFSoutput', type=str, required=True,
                     action="store", help="path for the output SFS")
 parser.add_argument('-I', '--islands', type=int, nargs="+", default=-9,
                     action="store", help="Number of individuals in each deme separated by a comma, must be in the same order as in your MS command")
@@ -100,21 +101,34 @@ if not quiet:
 		print "Random seed           "+str(seed)
 		numpy.random.seed(seed)
 	print "===================================================="
+"""
 
 
+t="C:/Users/Windows/Desktop/TRAVAIL FM/VANAPRABHAVA/VPB_DELL/temp/treeORI.txt"
+mu= 0.000000067256260017746 #0.00000067256260017746
+scale=2e+10
+ophylo="C:/Users/Windows/Desktop/TRAVAIL FM/VANAPRABHAVA/VPB_DELL/phylo.txt"
+osfs="C:/Users/Windows/Desktop/TRAVAIL FM/VANAPRABHAVA/VPB_DELL/sfs.txt"
+force_ultrametric=True
+plot_trees=False
+quiet=False
+ms_islands=[20000,20000,20000] #[20000,20000,20000]
+ms_input=True
+numpy.random.seed(10)
 
 ###############
 ## FUNCTIONS ##
 ###############
 
 def ubranch_mutation(node, mu):
-    lambd = node.dist * mu
-    rb = numpy.random.poisson(lambd)
-    if rb >= 1:
-        return True
-    else:
-        return False
-    
+	lambd = node.dist * mu
+	rb = numpy.random.poisson(lambd)
+	if rb >= 1:
+		return True
+	else:
+		return False
+
+""" #v1.6
 def leaf_species_dictionary(t):
     SPdict = {}
     SPcounts = {}
@@ -127,14 +141,15 @@ def leaf_species_dictionary(t):
             SPdict[sp] = [leaf]
             SPcounts[sp] = 1
     return SPdict, SPcounts
-    
+
 def range_by_length(start, end, length):
     step = ( end - start ) / (1.*length)
     L = list(numpy.arange(start, end, step))
     for l in range(0, len(L)):
         L[l] = int(round(L[l]))
     return L
-    
+"""
+
 def get_deme(tip_id, ms_islands):
     tip_id = int(tip_id)
     pop = numpy.where(tip_id <= ms_islands)
@@ -149,7 +164,7 @@ def get_deme(tip_id, ms_islands):
 ############
 ## SCRIPT ##
 ############
-  
+
 init = time.time()
 sys.stdout.write('[')
 
@@ -160,7 +175,7 @@ sys.stdout.write('R') # Read
 
 
 #======================================================#
-# SET at once: "names" of inner nodes && "species" attributes
+# SET at once: "names" of inner nodes && initialize "species" attributes
 if ms_input:
     ms_islands = numpy.array(ms_islands)
     ms_islands = numpy.cumsum(ms_islands)
@@ -171,6 +186,7 @@ largest_id = 0
 nIndsORI = 0
 for node in t.traverse():
     node.add_features(sp=1)
+    node.img_style["size"] = 0
     if not node.is_leaf():
         node.name = "iN%d" %innode
         innode += 1
@@ -181,6 +197,7 @@ for node in t.traverse():
            if inn > largest_id: largest_id = inn
            pop = get_deme(inn, ms_islands)
            node.name = str(pop)+"_"+node.name
+           node.add_features(mergedInd=node.name)
     if not node.is_root():
         node.dist *= scale
 
@@ -219,147 +236,125 @@ if plot_trees:
 
 
 #======================================================#
-# GET all the species IDs
-SPdict, SPcounts = leaf_species_dictionary(t)
-#spIDs = sorted(SPcounts, key=lambda k: SPcounts[k], reverse=True)
-spIDs = SPcounts.keys()
-print(spIDs)
-sys.stdout.write('G') # Get species
+# CONVERT demography to phylogeny using a traversing method
 
+# __/!\__ to be modified for non dichotomic trees (eg Lambda coalescent)
+traversedNodes = set()
 
-#======================================================#
-# CONVERT demography to phylogeny using a homemade traversing method
+for node in t.traverse("preorder"):
 
-# also REFORMAT SFS listing in case of persistent paraphylies
-# ie when a supposed parent is found as a child of another parent
+	if node not in traversedNodes:
 
-#> the traversing could be sped up maybe
-#> eg by computing the max distance between matching leaves
-#> and pruning them out FIRST (ie pruning the largest paraphylies)
+		if not node.is_leaf():
 
-iter = 0
-SFS = {}
-print2iter = set(range_by_length(0, len(spIDs), 5))
+			children = node.get_children()
+			if len(children) != 2:
+				sys.exit("The algorithm does not know how to deal with non dichotomic trees for the moment!")
 
-for spid in spIDs:
-    if spid in SPdict.keys():
+			# get child.1's tip species labels
+			csp1 = set()
+			for i in children[0]:
+				csp1.add(i.sp)
+			# get child.2's tip species labels
+			csp2 = set()
+			for i in children[1]:
+				csp2.add(i.sp)
 
-	    matchleaves = SPdict[spid]
+			# compare species label between children
+			common = csp1.intersection(csp2)
 
-	    # populate the SFS
-	    if len(matchleaves) == 1:
-                SFS[matchleaves[0].name] = set()
-                del SPdict[spid]
-	    
-            elif len(matchleaves) >= 2:
+			# if paraphyletic
+			if len(common) > 0:
 
-                firstleaf = matchleaves[0]
-                MRCA = t.get_common_ancestor(matchleaves)
-                sisters = MRCA.get_leaves()
-                ssp = set()
-                for ml in range(0, len(sisters)):
-                    ssp.add(sisters[ml].name)
+				if not node.is_root():
 
-                ssp = ssp - set([firstleaf.name])
+					# populate "mergedInd" feature for future SFS
+					mergedLeaves = ""
+					for l in node.iter_leaves():
+						mergedLeaves = mergedLeaves+" "+l.name
 
-                # clear SP dict
-                del SPdict[spid]
-                for spd in SPdict.keys():
-                    if SPdict[spd][0].name in ssp:
-                       del SPdict[spd]
-                
-                # check if any [sisters] is already present as key in the SFS dictionary
-                if len(SFS) > 0:
-                    prevKeys = set(SFS.keys())
-                    intersect = prevKeys & set(ssp)
-                    if len(intersect) > 0:
-                        #print "KATAM!"
-                        if firstleaf.name in prevKeys:
-                            SFS[firstleaf.name] = SFS[firstleaf.name].update(SFS[ssp])
-                        else:
-                            SFS[firstleaf.name] = ssp
-                            for iSect in intersect:
-                                SFS[firstleaf.name].update(SFS[iSect])
-                                del SFS[iSect]
-                    else:
-                        SFS[firstleaf.name] = ssp
-                else:
-                    SFS[firstleaf.name] = ssp
+					# collapse the subtree
+					upNode = node.up
+					newLeaf = node.get_farthest_leaf()
+					newDist = newLeaf[1] + node.dist
 
-	    # detach duplicate lineages at the root of their MRCA
-	    if len(matchleaves) >= 2:
-		
-		if not MRCA.is_root():
-		    upMRCA = MRCA.up
-		    newdist = t.get_distance(upMRCA, firstleaf)
-		    MRCA.detach()
-		    upMRCA.add_child(firstleaf, firstleaf.name, newdist)        
-		else:
-		    newdist = t.get_distance(MRCA, firstleaf)
-		    children = MRCA.get_children()
-		    for child in children:
-		        child.detach()
-		    MRCA.add_child(firstleaf, firstleaf.name, newdist)
+					for childnode in node.traverse():
+						traversedNodes.add(childnode)
+					bad = node.detach()
+					upNode.add_child(newLeaf[0], newLeaf[0].name, newDist)
 
-    iter += 1
-    #if iter in print2iter: sys.stdout.write('C') # Convert
+					# the node.prune() function is too lenghty
+
+					# actualize "mergedInd" feature of new leaf
+					newLeaf[0].mergedInd = mergedLeaves
+
+				else:
+
+					# populate "mergedInd" feature for future SFS
+					mergedLeaves = ""
+					for l in node.iter_leaves():
+						mergedLeaves = mergedLeaves+" "+l.name
+
+					# collapse the subtree
+					newLeaf = t.get_farthest_leaf()
+					for child in t.get_children():
+						child.detach()
+					node.add_child(newLeaf[0], newLeaf[0].name, newLeaf[1])
+
+					# actualize "mergedInd" feature of new leaf
+					newLeaf[0].mergedInd = mergedLeaves
 
 sys.stdout.write('CCCC')
+nTrueSpecies = len(t)
+
+#======================================================#
+# COMPUTE & PRINT the SFS (full names & numerical)
+
+f = open(osfs+"_allinds.txt", 'w+')
+fn = open(osfs, 'w+')
+fn.write("Tip_label\t" + "\t".join("Isl_"+str(x) for x in range(0, nPops)) + "\n")
+
+for leaf in t.iter_leaves():
+	inds = leaf.mergedInd.lstrip(" ")
+	# write the SFS with full names
+	f.write(leaf.name+" : "+inds+"\n")
+	# compute the per-deme numerical SFS
+	sfs = [0] * nPops
+	inds = inds.split(" ")
+	for i in inds:
+		pop = int(i.split("_")[0])
+		sfs[pop-1] += 1
+		nIndsSFS += 1
+	fn.write(leaf.name+"\t"+"\t".join(str(x) for x in sfs)+"\n")
+
+f.close()
+fn.close()
+
+
 #======================================================#
 
 # ultrametricity in the output tree is defined in reference to the furthest leaf
 if force_ultrametric:
-    tree_dist = t.get_farthest_leaf()[1]
-    for l in t:
-        dst = t.get_distance(l)
-        if dst != tree_dist:
-            l.dist += tree_dist - dst
-    
-#======================================================#
-# COMPUTE the SFS
-nTrueSpecies = len(t)
-SFS2 = SFS.copy()
-nIndsSFS = 0
-for i in SFS:
-    spSFS = list(SFS[i])
-    spSFS.append(i)
-    sfs = [0] * nPops
-    for j in range(0, len(spSFS)):
-        pop = int(spSFS[j].split("_", 1)[0])
-        sfs[pop-1] += 1
-        nIndsSFS += 1
-    SFS[i] = sfs
+	tree_dist = t.get_farthest_leaf()[1]
+	for l in t:
+		dst = t.get_distance(l)
+		if dst != tree_dist:
+			l.dist += tree_dist - dst
 
 #======================================================#
-# PRINT
-## print SFS2
-f = open(osfs+"_allinds.txt", 'w+')
-for i in SFS2:
-    f.write(i + "\t")
-    f.write("\t".join(SFS2[i]))
-    f.write("\n")
-f.close()
-## print SFS
-f = open(osfs, 'w+')
-start = True
-for i in SFS:
-    if start: f.write("Tip_label\t" + "\t".join("Isl_"+str(x) for x in range(0, len(SFS[i]))) + "\n")
-    f.write(i + "\t")
-    f.write("\t".join(str(x) for x in SFS[i]))
-    f.write("\n")
-    start = False
-f.close()
+
 ## print PHYLO
 t.write(format=5, outfile=ophylo, dist_formatter='%0.20f')
-# write number of true species
+# write the count of resultant species
 f = open(ophylo, 'a')
 f.write("\n"+str(nTrueSpecies)+"\n")
 f.close()
 
 if plot_trees:
-    for leaf in t:
-        leaf.name = leaf.sp
-    t.render(ophylo+"_3PHYLO.png", w=183, units="mm")
+	for leaf in t:
+		leaf.name = leaf.sp
+	t.render(ophylo+"_3PHYLO.png", w=183, units="mm")
+"""
 sys.stdout.write('P] ') # Print
 if not quiet: print "            >> " + str(time.time() - init) + " sec"
 if not quiet: print "Total species count      >> " + str(len(SFS))
@@ -367,6 +362,5 @@ if (len(SFS) == nTrueSpecies) and (nIndsSFS == nIndsORI):
 	print "Exit status              >> OK!"
 else: sys.exit("ERROR. A bug must be crawling around... Please, please, contact the programmer.")
 
-
-
+"""
 
