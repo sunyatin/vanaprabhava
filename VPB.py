@@ -2,16 +2,18 @@
 
 # -*- coding: utf-8 -*-
 """
-VANAPRABHAVA v.1.5
+VANAPRABHAVA v.1.6
+
 Created on Wed Dec 23 17:33:31 2015
 @author: Remi Tournebize
 @contact: remi (dot) tournebize (at) gmail (dot) com
-@sotd: "Sabre a finances, corne de ma gidouille, madame la financiere, j'ai des oneilles pour parler et vous une bouche pour m'entendre."
+sotd: "Sabre a finances, corne de ma gidouille, madame la financiere, j'ai des oneilles pour parler et vous une bouche pour m'entendre."
 
-@v1.2: more profiling than v1.1 resulting in a significant gain of speed
-@v1.3_ms: few debuggings on the SFS (duplicates)
-@v1.4: debugged issues related to time decimal precision in Newick strings + modified force_ultrametricity module
-@v1.5 31122015: changed binomial to poisson random (large branch lengths throw an error on C long type for binomial)
+v1.2: more profiling than v1.1 resulting in a significant gain of speed
+v1.3_ms: few debuggings on the SFS (duplicates)
+v1.4: debugged issues related to time decimal precision in Newick strings + modified force_ultrametricity module
+v1.5 31122015: changed binomial to poisson random (large branch lengths throw an error on C long type for binomial)
+v1.6 07012015: print out the number of species 1 line AFTER the newick-formatted phylo tree in the .newick output files
 """
 
 from ete3 import Tree
@@ -219,7 +221,9 @@ if plot_trees:
 #======================================================#
 # GET all the species IDs
 SPdict, SPcounts = leaf_species_dictionary(t)
-spIDs = sorted(SPcounts, key=lambda k: SPcounts[k], reverse=True)
+#spIDs = sorted(SPcounts, key=lambda k: SPcounts[k], reverse=True)
+spIDs = SPcounts.keys()
+print(spIDs)
 sys.stdout.write('G') # Get species
 
 
@@ -313,7 +317,7 @@ if force_ultrametric:
     
 #======================================================#
 # COMPUTE the SFS
-
+nTrueSpecies = len(t)
 SFS2 = SFS.copy()
 nIndsSFS = 0
 for i in SFS:
@@ -345,8 +349,13 @@ for i in SFS:
     f.write("\n")
     start = False
 f.close()
-## print PHYLO 
+## print PHYLO
 t.write(format=5, outfile=ophylo, dist_formatter='%0.20f')
+# write number of true species
+f = open(ophylo, 'a')
+f.write("\n"+str(nTrueSpecies)+"\n")
+f.close()
+
 if plot_trees:
     for leaf in t:
         leaf.name = leaf.sp
@@ -354,7 +363,7 @@ if plot_trees:
 sys.stdout.write('P] ') # Print
 if not quiet: print "            >> " + str(time.time() - init) + " sec"
 if not quiet: print "Total species count      >> " + str(len(SFS))
-if (len(SFS) == len(t.get_leaves())) and (nIndsSFS == nIndsORI):
+if (len(SFS) == nTrueSpecies) and (nIndsSFS == nIndsORI):
 	print "Exit status              >> OK!"
 else: sys.exit("ERROR. A bug must be crawling around... Please, please, contact the programmer.")
 
