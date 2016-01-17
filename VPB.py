@@ -34,7 +34,7 @@ import os.path
 
 # assumes coalescent, ie ultrametric trees
 
-"""
+
 ################
 ## PARAMETERS ##
 ################
@@ -77,7 +77,7 @@ scale = args.scalingFactor #ok
 ophylo = args.PHYLOoutput #ok
 osfs = args.SFSoutput #ok
 force_ultrametric = args.forceUltrametric #ok
-maxNumberOfSpecies = args.maxNumberOfSpecies
+maxNumberOfSpecies = args.maxNumberOfSpecies #ok
 plot_trees = args.drawTrees #ok
 seed = args.seed #ok
 quiet = args.quiet #ok
@@ -96,6 +96,7 @@ if not quiet:
 	print "Scaling factor        "+str(scale)
 	print "Mutation rate         "+str(mu)
 	print "Force ultrametric     "+str(force_ultrametric)
+	if maxNumberOfSpecies != -1: print "Max. taxon count      "+str(maxNumberOfSpecies)
         print "...................................................."
 	print "Reading               "+t
 	print "PHYLO output          "+ophylo
@@ -105,21 +106,7 @@ if not quiet:
 		print "Random seed           "+str(seed)
 		numpy.random.seed(seed)
 	print "===================================================="
-"""
 
-
-t="C:/Users/Windows/Desktop/TRAVAIL FM/VANAPRABHAVA/VPB_DELL/temp/test.txt"
-mu= 0.0000067256260017746 #0.00000067256260017746
-scale=2e+10
-ophylo="C:/Users/Windows/Desktop/TRAVAIL FM/VANAPRABHAVA/VPB_DELL/phylo.txt"
-osfs="C:/Users/Windows/Desktop/TRAVAIL FM/VANAPRABHAVA/VPB_DELL/sfs.txt"
-force_ultrametric=True
-maxNumberOfSpecies = 2000
-plot_trees=True
-quiet=False
-ms_islands=[200,100,200] #[20000,20000,20000]
-ms_input=True
-numpy.random.seed(10)
 
 ###############
 ## FUNCTIONS ##
@@ -306,7 +293,7 @@ for node in t.traverse("preorder"):
 					node.detach()
 					upNode.add_child(newLeaf[0], newLeaf[0].name, newDist)
 
-					# the node.prune() function is too slow
+					# NB. using the node.prune() function is too slow
 
 					# actualize "mergedInd" feature of new leaf
 					newLeaf[0].mergedInd = mergedLeaves
@@ -367,7 +354,7 @@ if force_ultrametric:
 				l.dist += tree_dist - dst
 		sys.stdout.write('u')
 	else:
-		sys.stdout.write('\nWill not go ultrametric: too many final species!\n')
+		sys.stdout.write('\nERROR. Too many final species: will not force ultrametricity.\n')
 
 #======================================================#
 # EXPORT phylo
