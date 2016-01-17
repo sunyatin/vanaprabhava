@@ -5,8 +5,12 @@ import time
 
 # assumes coalescent, ie ultrametric trees
 
+numpy.random.seed(2)
+
+init = time.time()
+
 mu = 1e-4
-plot_trees = True
+plot_trees = False
 
 # on peut se passer du search_leaves_by_sp
 # si on traverse en preorder
@@ -34,9 +38,9 @@ def get_all_sp(t):
     
 def search_leaves_by_sp(t, value):
     leaves = []
-    for leaf in t:
+    for leaf in t.iter_leaves():
         if leaf.sp == value:
-            leaves.append(leaf.name)
+            leaves.append(leaf)
     return(leaves)
 
 
@@ -69,14 +73,20 @@ for node in t.traverse("preorder"):
                 leaf.sp = spID
 
 # print the mutational tree
-t2 = t.copy()
-for leaf in t2:
-    leaf.name = leaf.sp
-if plot_trees: t2.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/2MUT.png", w=183, units="mm")
+#t2 = t.copy()
+#for leaf in t2:
+#    leaf.name = leaf.sp
+#if plot_trees: t2.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/2MUT.png", w=183, units="mm")
+
+# print the mutational tree
+for leaf in t:
+    leaf.name = "_"+str(leaf.sp)+"_" +leaf.name
+t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/2MUT_v11.png", w=183, units="mm")
+
 
 print "Get (decr) sorted species IDs"
-#spIDs = get_all_sp(t)
-#print len(spIDs)
+spIDs = get_all_sp(t)
+print len(spIDs)
 
 print "Converting to phylogeny"
 # the traversing could be sped up maybe
@@ -91,46 +101,81 @@ print "Converting to phylogeny"
 # en 5 levels a peu pres isomorphe, on gagne environ
 # n/5 diversite
 
-tori = t.copy()
-spIDs = get_all_sp(t)
-init = time.time()
+#TreeNode.up.remove_child('x')
 
 iter = 0
+SFS = []
+outSP = []
 for spid in spIDs:
     matchleaves = search_leaves_by_sp(t, spid)
+    
+    if len(matchleaves) >= 1:
+        ssp = []
+        for ml in matchleaves:
+            ssp.append(ml.name)
+        SFS.append(ssp)
+        outSP.append(matchleaves[0].name)
+    
     if len(matchleaves) >= 2:
+        
+        # note 4 future profiling: use a list comprehension
+        
         MRCA = t.get_common_ancestor(matchleaves)
         if not MRCA.is_root():
             upMRCA = MRCA.up
-            keepleaf = t&str(matchleaves[0])
+            keepleaf = matchleaves[0]
             newdist = t.get_distance(upMRCA, keepleaf)
             MRCA.detach()
             upMRCA.add_child(keepleaf, keepleaf.name, newdist)        
         else:
-            keepleaf = t&str(matchleaves[0])
+            keepleaf = matchleaves[0]
             newdist = t.get_distance(MRCA, keepleaf)
             MRCA.children[0].detach()
             MRCA.children[0].detach()
             MRCA.add_child(keepleaf, keepleaf.name, newdist)
     iter += 1
-    #if iter % 100 == 0: print iter,
-print time.time() - init
-
-t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/3_FINAL_OLD.png", w=183, units="mm")
-
-
-t = tori.copy()
-
-
+    if iter % 100 == 0: print iter,
 
 #print t
+#print SFS
 
-for l in t.iter_leaves():
-    print l
 
-#print t
-
+def get_duplicates(l):
+  seen = set()
+  seen_add = seen.add
+  overseen = set( x for x in l if x in seen or seen_add(x) )
+  return list( overseen )
+  
+  
+# reformat the SFS list of lists
+#flatSFS = [item for sublist in SFS for item in sublist]
+#dupSP = set([x for x in flatSFS if flatSFS.count(x) > 1])
+#if len(dupSP) > 0:
+#    for dsp in dupSP:
+dupRows = []
+for i in range(len(SFS)):
+    for j in range(1, len(SFS[i])):
+        if SFS[i][j] in outSP:
+            print str(i) + "  " + str(j)
+            print "REDUNDANCY!!!"
+            dupRows.append(i)            
+for i in sorted(dupRows, reverse=True):
+    del SFS[i]
+    
+f = open('C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/SFS.txt', 'w+')
+for i in range(len(SFS)):
+    f.write("\t".join(SFS[i]))
+    f.write("\n")
+f.close()
+    
+    
+# TMP
+for leaf in t:
+    leaf.name = leaf.sp    
+    
 #if plot_trees: 
 t.render("C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/3_FINAL_NEW.png", w=183, units="mm")
-t.write(format=5, outfile="C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/3_FINAL_NEW.txt")
+t.write(format=5, outfile="C:/Users/Windows/Desktop/TRAVAIL FM/PythonicWork/Vanaprabhava/V1.1.txt")
+
+print ">>>> " + str(time.time() - init)
 
