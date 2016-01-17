@@ -1,8 +1,12 @@
 #!/usr/bin/env Rscript
 
+print.past.events <- TRUE
+sequential.scaling <- TRUE
+
 # VANAPRABHAVA pipeline, only UNIX compatible
 # v1.0 created on Dec. 30th 2015
-# v1.1 Dec. 31th 2015 -- now can deal with simple conditions between parameters
+# v1.1 Dec. 31th 2015 -- now can deal with simple conditions between unique parameters
+# v1.2 Jan. 2nd 2016 -- added a sequential scaling for Ne variations
 # remi (dot) tournebize (at) gmail (dot) com
 # command-line in UNIX: Rscript path_to_script/VPB.R path_to_the_parameter_file
 # make sure that VPB.R script is executable (chmod +750)
@@ -20,7 +24,7 @@ coalescent.ploidy <- "haploid" # either "haploid" or "diploid"
 
 #___ outDir/
 #    |___ temp/
-#    |___ phyloTrees/{input_prm_file}.newick
+#    |___ PHYLO/{input_prm_file}.newick
 #    |___ SFS/{input_prm_file}.sfs
 #    |___ {input_prm_file}.priors
 
@@ -41,7 +45,11 @@ replace <- function(X, vals) {
   return(X)
 }
 
-get.conditional.values <- function(priors, conditions) {
+
+# this function is not working properly when there are parameter redundancies in the conditions
+# it aims at passing by the while-loop in order to gain run speed
+DRAFT.get.conditional.values <- function(priors, conditions) {
+  stop("THIS FUNCTION IS STILL A DRAFT. IMPLEMENTED TO GAIN RUN SPEED.")
   
   # format conditions
   if (length(conditions)>0) {
@@ -72,6 +80,7 @@ get.conditional.values <- function(priors, conditions) {
     ordered <- c(CD[,3], vals$param[!vals$param %in% CD[,3]])
     vals <- vals[ordered,]
   }
+  print(vals)
 
 # instead of redefining the boundaries according to the conditions
 # there is the possibility to use a while-loop (requiring less script)
@@ -111,6 +120,66 @@ get.conditional.values <- function(priors, conditions) {
   vals <- vals[rownames(priors),]
   return(vals)
 }
+
+get.values <- function(priors) {
+  # a simple get values
+  
+  vals <- as.data.frame(cbind(priors[,1], NA), stringsAsFactors=F)
+  names(vals) <- c("param","val"); vals$val <- as.numeric(vals$val)
+  for ( i in 1:nrow(vals) ) {
+    if (priors[i,3] == "unif") {
+      vals[i,2] <- runif(1, as.numeric(priors[i,4]), as.numeric(priors[i,5]))
+    } else if (priors[i,3] == "logunif") {
+      logval <- runif(1, log10(as.numeric(priors[i,4])), log10(as.numeric(priors[i,5])))
+      vals[i,2] <- 10^logval
+    } else {
+      stop("Unrecognized distribution law...")
+    }
+    if (priors[i,2]=="1") vals[i,2] <- round(vals[i,2])
+  }
+  
+  rownames(vals) <- vals[,1]
+  return(vals)
+}
+
+# using a while-loop
+get.conditional.values <- function(priors, conditions) {
+  
+  # format conditions
+  if (length(conditions)>0) {
+    CD <- c()
+    for ( i in seq_along(conditions) ) {
+      cd <- conditions[i]
+      if (grepl("<", cd)) {
+        while(grepl(" ",cd)) cd <- gsub(" ","",cd)
+        cd <- unlist(strsplit(cd, "<"))
+        CD <- rbind(CD, c(paste("vals[\"",cd[1],"\",2]",sep=""), ">", paste("vals[\"",cd[2],"\",2]",sep="")))
+      } else if (grepl(">", cd)) {
+        while(grepl(" ",cd)) cd <- gsub(" ","",cd)
+        cd <- unlist(strsplit(cd, ">"))
+        CD <- rbind(CD, c(paste("vals[\"",cd[1],"\",2]",sep=""), "<", paste("vals[\"",cd[2],"\",2]",sep="")))
+      } else {
+        stop("Conditions are badly formatted!")
+      }
+    }
+    
+    CD <- apply(CD, 1, function(x) paste(x, collapse=" "))
+    conditions <- parse(text=paste(c(CD), collapse=" || "))
+  } else { conditions <- NULL }
+  
+  vals <- get.values(priors)
+  if (!is.null(conditions)) {
+    iter <- 0
+    while( eval(conditions) ) {
+      iter <- iter + 1
+      vals <- get.values(priors)
+    }
+    print(paste("Condition-iteration count:",iter))
+  }
+  
+  return(vals)
+}
+
 
 generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent.ploidy) {
   
@@ -196,6 +265,7 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
     
     # sort chronologically
     EE <- EE[order(as.numeric(EE$time)),]
+    ej <- ej[order(as.numeric(ej$time)),]
     
     if (!is.null(ej)) {
       for ( i in 1:nrow(ej) ) {
@@ -203,8 +273,13 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
         if ( ej[i,4] == 1 ) {
           prev.en <- rev(which(EE$time <= ej$time[i]))[1]
           new.en <- EE[prev.en,]
-          new.en[c(1,as.integer(ej[i,3])+1)] <- c(ej$time[i],
+          if (sequential.scaling) {
+            new.en[c(1,as.integer(ej[i,3])+1)] <- c(ej$time[i], 1/as.numeric(EE[prev.en,as.integer(ej[i,3])+1]) *
+                                                    (as.numeric(EE[prev.en,as.integer(ej[i,2])+1]) + as.numeric(EE[prev.en,as.integer(ej[i,3])+1]))) 
+          } else {
+            new.en[c(1,as.integer(ej[i,3])+1)] <- c(ej$time[i],
                                                   as.numeric(EE[prev.en,as.integer(ej[i,2])+1]) + as.numeric(EE[prev.en,as.integer(ej[i,3])+1])) 
+          }
           # insert the new -en event
           EE <- rbind(EE, new.en)
           # always re-sort
@@ -217,7 +292,18 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
     rownames(EE) <- NULL
     colnames(EE)[-1] <- paste("ISL_",2:ncol(EE)-1,sep="")
     #print("Past historical events:")
-    #print(EE)
+    if (print.past.events) print(ej)
+    if (print.past.events) print(EE)
+    
+    # sequential scaling, if requested
+    if (sequential.scaling) {
+      sEE <- EE
+      for ( i in 2:nrow(EE) ) {
+        sEE[i,-1] <- sEE[i,-1] * sEE[i-1,-1]
+      }
+      if (print.past.events) { print("Rescaled past events in reference to No:"); print(sEE) }
+      EE <- sEE
+    }
     
     # remove stable Ne events on a time-sorted EE matrix
     NEE <- EE
@@ -325,6 +411,12 @@ if ( grepl(" ",ms_path) || !file.exists(ms_path) ) stop("ERROR. Found a space in
 if ( grepl(" ",VPB_path) || !file.exists(VPB_path) ) stop("ERROR. Found a space in VPB_path or file does not exist. Exiting.")
 if ( grepl(" ",outDir) ) stop("ERROR. Found a space in outDir path. Exiting.")
 
+# get the radical (= model strict name)
+RADICAL <- rev(unlist(strsplit(inputFile, "/")))[1]
+RADICAL <- unlist(strsplit(RADICAL, "\\."))
+RADICAL <- paste(RADICAL[-length(RADICAL)], collapse=".")
+print(RADICAL)
+
 # create the outDir
 if (!dir.exists(outDir)) { dir.create(paste(outDir,"/temp",sep=""), recursive=TRUE); print(paste("Created dir: ",outDir)) }
 if (!dir.exists(paste(outDir,"/PHYLO",sep=""))) dir.create(paste(outDir,"/PHYLO",sep=""))
@@ -336,6 +428,9 @@ if (empty_previous_files==1) {
   if (length(f)>0) x=sapply(f, function(x) if (file.exists(x)) unlink(x, recursive=FALSE))
   if (file.exists(paste(outDir,"/temp/ms.txt",sep=""))) unlink(paste(outDir,"/temp/ms.txt",sep=""))
   if (file.exists(paste(outDir,"/temp/ListPRM.bin",sep=""))) unlink(paste(outDir,"/temp/ListPRM.bin",sep=""))
+  if (file.exists(paste(outDir,"/",RADICAL,".log",sep=""))) unlink(paste(outDir,"/",RADICAL,".log",sep=""))
+  if (file.exists(paste(outDir,"/",RADICAL,".errors",sep=""))) unlink(paste(outDir,"/",RADICAL,".errors",sep=""))
+
   print("Safely removed previous files from the outDir!")
   if (!is.null(warnings())) print(warnings())
 }
@@ -345,12 +440,6 @@ if (!grepl("^\\.\\/", ms_path, perl=T) && !grepl("^\\/", ms_path, perl=T)) ms_pa
 if (!grepl("^\\.\\/", VPB_path, perl=T) && !grepl("^\\/", ms_path, perl=T)) VPB_path <- paste("./",VPB_path,sep="")
 # set the permissions to the scripts
 Sys.chmod(ms_path, "0750"); Sys.chmod(VPB_path, "0750")
-
-# get the radical (= model strict name)
-RADICAL <- rev(unlist(strsplit(inputFile, "/")))[1]
-RADICAL <- unlist(strsplit(RADICAL, "\\."))
-RADICAL <- paste(RADICAL[-length(RADICAL)], collapse=".")
-print(RADICAL)
 
 #####################################
 #####################################
@@ -430,7 +519,10 @@ for ( run in simul_start:simul_end ) {
   print(python)
   VPB.STDOUT <- system(python, intern=TRUE)
   attr <- attributes(VPB.STDOUT)
-  if (!is.null(attr) && attr$status!=0) stop("ERROR on exit status of VPB.py")
+  if (!is.null(attr) && attr$status!=0) {
+    err <- c(RADICAL, run, "ERROR in python conversion. Most probably due to too large efficient sizes outputting large branch lengths which cannot be converted to C long type.")
+    write.table(paste(err, collapse="\t"), paste(outDir,"/",RADICAL,".errors",sep=""), append=T, row.names=F, col.names=F, quote=F)
+  }
   print(VPB.STDOUT)
   
 }
