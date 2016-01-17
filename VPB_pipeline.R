@@ -11,8 +11,7 @@ argv <- commandArgs(trailingOnly=TRUE)
 inputFile <- argv[1]
 if (!file.exists(inputFile)) stop("ERROR. Input file does not exist! Exiting.")
 
-# specific interest, so theta = 2 * No * mu (there is no consideration for TWO copies of
-# genes per individual)
+# by default in MS, theta=4*No*mu for No in diploid individuals
 coalescent.ploidy <- "haploid" # either "haploid" or "diploid"
 # please note that for demophylogenetical models, we are working with individuals
 # which are the replicators in consideration and there is one copy of each of
@@ -42,13 +41,84 @@ replace <- function(X, vals) {
   return(X)
 }
 
+get.conditional.values <- function(priors, conditions) {
+  
+  # format conditions
+  if (length(conditions)>0) {
+    CD <- c()
+    for ( i in seq_along(conditions) ) {
+      cd <- conditions[i]
+      if (grepl("<", cd)) {
+        while(grepl(" ",cd)) cd <- gsub(" ","",cd)
+        cd <- unlist(strsplit(cd, "<"))
+        CD <- rbind(CD, c(cd[1], "<", cd[2]))
+      } else if (grepl(">", cd)) {
+        while(grepl(" ",cd)) cd <- gsub(" ","",cd)
+        cd <- unlist(strsplit(cd, ">"))
+        CD <- rbind(CD, c(cd[1], ">", cd[2]))
+      } else {
+        stop("Conditions are badly formatted!")
+      }
+    }
+  } else { CD <- NULL }
+  
+  rownames(priors) <- priors[,1]
+  vals <- as.data.frame(cbind(priors[,1], NA), stringsAsFactors=F)
+  names(vals) <- c("param","val"); vals$val <- as.numeric(vals$val)
+  rownames(vals) <- vals$param
+  
+  # set param order according to condition order
+  if (!is.null(CD)) {
+    ordered <- c(CD[,3], vals$param[!vals$param %in% CD[,3]])
+    vals <- vals[ordered,]
+  }
+
+# instead of redefining the boundaries according to the conditions
+# there is the possibility to use a while-loop (requiring less script)
+# yet the while-loop will require more computations on the user side
+  for ( i in 1:nrow(vals) ) {
+    prm.name <- vals$param[i]
+    prm <- priors[priors[,1]==prm.name,]
+    if (is.null(CD)) {
+      low <- as.numeric(prm[4])
+      up <- as.numeric(prm[5])
+    } else {
+      wcd <- which(CD[,1]==prm.name)
+      if (length(wcd)>0) {
+        if (CD[wcd,2] == "<") {
+          low <- as.numeric(prm[4])
+          up <- as.numeric(vals[vals$param==CD[wcd,3],2])
+        } else if (CD[wcd,2] == ">") {
+          low <- as.numeric(vals[vals$param==CD[wcd,3],2])
+          up <- as.numeric(prm[5])
+        }
+      } else {
+        low <- as.numeric(prm[4])
+        up <- as.numeric(prm[5])
+      }
+    }
+    if (priors[i,3] == "unif") {
+      vals[i,2] <- runif(1, low, up)
+    } else if (priors[i,3] == "logunif") {
+      logval <- runif(1, log10(low), log10(up))
+      vals[i,2] <- 10**logval
+    } else {
+      stop("Unrecognized distribution law...")
+    }
+    if (prm[2]=="1") vals[i,2] <- round(vals[i,2])
+  }
+  
+  vals <- vals[rownames(priors),]
+  return(vals)
+}
+
 generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent.ploidy) {
   
   if (firstRun==TRUE) {
     con <- file(inputFile, open="r")
     
-    n <- Ne <- ej <- en <- ep <- priors <-  c()
-    F <- FALSE; read <- c("mu"=F, "n"=F, "Ne"=F, "ej"=F, "en"=F, "ep"=F, "priors"=F)
+    n <- Ne <- ej <- en <- ep <- priors <- conditions <- c()
+    F <- FALSE; read <- c("mu"=F, "n"=F, "Ne"=F, "ej"=F, "en"=F, "ep"=F, "priors"=F, "conditions"=F)
     while( length(l <- readLines(con, n=1, warn=FALSE)) > 0 ) {
       
       if ( grepl("^\\[", l, perl=T) ) read[read] <- FALSE
@@ -59,6 +129,7 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
       if ( grepl("\\[PUNCTUAL EVENTS", l) ) read["en"] <- TRUE
       if ( grepl("\\[PERIODIC EVENTS", l) ) read["ep"] <- TRUE
       if ( grepl("\\[PRIORS", l) ) read["priors"] <- TRUE
+      if ( grepl("\\[CONDITIONS", l) ) read["conditions"] <- TRUE
       
       if ( !grepl("^#", l, perl=T) && !grepl("^\\[", l, perl=T) && nchar(l) >= 1 ) {
         if (read["mu"]) mu <- l
@@ -68,10 +139,11 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
         if (read["en"]) en <- rbind(en, unlist(strsplit(l, " ")))
         if (read["ep"]) ep <- rbind(ep, unlist(strsplit(l, " ")))
         if (read["priors"]) priors <- rbind(priors, unlist(strsplit(l, " ")))
+        if (read["conditions"]) conditions <- c(conditions, l)
       }
     }
     close(con)
-    LPRM <- list(mu=mu, n=n, Ne=Ne, ej=ej, en=en, ep=ep, priors=priors)
+    LPRM <- list(mu=mu, n=n, Ne=Ne, ej=ej, en=en, ep=ep, priors=priors, conditions=conditions)
     save(LPRM, file=paste(outDir,"/temp/ListPRM.bin",sep=""))
   } else {
     load(paste(outDir,"/temp/ListPRM.bin",sep=""))
@@ -82,19 +154,7 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
   
   # replace all data by their values
   if (length(priors)>0) {
-    vals <- as.data.frame(cbind(priors[,1], NA), stringsAsFactors=F)
-    names(vals) <- c("param","val"); vals$val <- as.numeric(vals$val)
-    for ( i in 1:nrow(priors) ) {
-      if (priors[i,3] == "unif") {
-        vals[i,2] <- runif(1, as.numeric(priors[i,4]), as.numeric(priors[i,5]))
-      } else if (priors[i,3] == "logunif") {
-        logval <- runif(1, log10(as.numeric(priors[i,4])), log10(as.numeric(priors[i,5])))
-        vals[i,2] <- 10**logval
-      } else {
-        stop("Unrecognized distribution law...")
-      }
-      if (priors[i,2]=="1") vals[i,2] <- round(vals[i,2])
-    }
+    vals <- get.conditional.values(priors, conditions)
   } else { vals <- NULL }
   
   # replace values
@@ -156,8 +216,8 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
     # print
     rownames(EE) <- NULL
     colnames(EE)[-1] <- paste("ISL_",2:ncol(EE)-1,sep="")
-    print("Past historical events:")
-    print(EE)
+    #print("Past historical events:")
+    #print(EE)
     
     # remove stable Ne events on a time-sorted EE matrix
     NEE <- EE
@@ -199,10 +259,10 @@ generate.ms.command <- function(ms_path, inputFile, firstRun, outDir, coalescent
     }
     
     if (!is.null(ej)) EE <- c(c.en, c.ej) else EE <- c.en
-    EE <- EE[order(as.numeric(names(EE)), EE)]
+    if (!is.null(EE)) EE <- EE[order(as.numeric(names(EE)), EE)]
     EE <- paste(EE, collapse=" ")
     rownames(EE) <- NULL
-    
+
     return(EE)
   }
   
@@ -324,17 +384,25 @@ for ( run in simul_start:simul_end ) {
   # get the priors
   LOUT <- generate.ms.command(ms_path, inputFile, firstRun, outDir, coalescent.ploidy)
   for (l in seq_along(LOUT)) assign(names(LOUT)[l], LOUT[[l]])
-  
+
   # export the priors
-  vvals <- as.numeric(vals[,2]); names(vvals) <- vals[,1]
-  vals <- vvals
-  if (empty_previous_files==1 && firstRun==TRUE) {
-    write.table(t(vals), paste(outDir,"/",RADICAL,".priors",sep=""), row.names=F, quote=F, sep="\t")
+  if (length(vals)>0) {
+    vvals <- as.numeric(vals[,2]); names(vvals) <- vals[,1]
+    vvals <- t(vvals); vals <- c(RADICAL, run, c(vvals))
+    names(vals) <- c("Model", "Run", colnames(vvals)) 
+
+    if (empty_previous_files==1 && firstRun==TRUE) {
+      write.table(t(vals), paste(outDir,"/",RADICAL,".priors",sep=""), row.names=F, quote=F, sep="\t")
+    } else {
+      write.table(t(vals), paste(outDir,"/",RADICAL,".priors",sep=""), col.names=F, row.names=F, sep="\t", append=T, quote=F)
+    }
+    
+    #print("Parameter values:"); print(vals)
   } else {
-    write.table(t(vals), paste(outDir,"/",RADICAL,".priors",sep=""), col.names=F, row.names=F, sep="\t", append=T, quote=F)
+    if (empty_previous_files==1 && firstRun==TRUE) {
+      write.table(NULL, paste(outDir,"/",RADICAL,".priors",sep=""), row.names=F, quote=F, sep="\t")
+    }
   }
-  print("Parameter values:")
-  print(t(vals))
   
   # get the VPB-python command
   python <- paste(VPB_path," ",
@@ -370,6 +438,7 @@ for ( run in simul_start:simul_end ) {
 # end sinking to log file
 sink()
 
+cat("\n\n")
 print("Ended at: ")
 print(proc.time())
 print("ALL DONE")
